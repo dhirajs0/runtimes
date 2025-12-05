@@ -224,7 +224,6 @@ jobs:
     needs: [ runtime-matrix ]
     runs-on: self-hosted
     strategy:
-      # Ensure the other jobs are continue
       fail-fast: false
       matrix:
         runtime: ${{ fromJSON(needs.runtime-matrix.outputs.runtime) }}
@@ -259,16 +258,11 @@ jobs:
           PACKAGE_NAME=${{ matrix.runtime.package }}
           RUNTIME_BLOB_NAME=$(echo $PACKAGE_NAME | sed 's/-/_/g').compact.compressed.wasm
           RUNTIME_BLOB_PATH=./target/production/wbuild/$PACKAGE_NAME/$RUNTIME_BLOB_NAME
-          # Build wasm
           echo "Building wasm RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
-
           FEATURES=""
-          # Find out if the `metadata-hash` feature exists for the given package.
           if cargo metadata --format-version=1 | jq '.packages[] | select(.name=="${{ matrix.runtime.package }}") | .features' | grep metadata-hash; then
             FEATURES="metadata-hash"
           fi
-
-          # Add extra features
           if [ -n "${{ matrix.runtime.build_extra_features }}" ]; then
             if [ -z "$FEATURES" ]; then
               FEATURES="${{ matrix.runtime.build_extra_features }}"
@@ -276,12 +270,9 @@ jobs:
               FEATURES="$FEATURES,${{ matrix.runtime.build_extra_features }}"
             fi
           fi
-
           if [ -n "$FEATURES" ]; then
             FEATURES="--features=$FEATURES"
           fi
-
-          # We only enable `metadata-hash`, but not `on-chain-release-build` to still have logs enabled.
           echo "Setting features: ${FEATURES}"
           cargo build --profile production -p ${{ matrix.runtime.package }} $FEATURES -q --locked
           echo "RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH" >> $GITHUB_ENV
@@ -299,7 +290,7 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ runner.environment == 'github-hosted' }}
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: false
 
@@ -319,13 +310,21 @@ jobs:
 
       - name: Setup runtime overrides
         run: |
-          jq --raw-output '.[] | .name, .package' .github/workflows/runtimes-matrix.json | while read -r NAME && read -r PACKAGE; do
-            NAME="$(echo $NAME | tr -d '-' | tr '[:lower:]' '[:upper:]')"
-            RUNTIME_BLOB_NAME=$(echo $PACKAGE | sed 's/-/_/g').compact.compressed.wasm
-            echo "Setting runtime override ${NAME}_WASM=$(pwd)/${RUNTIME_BLOB_NAME}"
-            # Set the path to the build runtimes
-            eval "export ${NAME}_WASM=$(pwd)/${RUNTIME_BLOB_NAME}"
-          done
+          jq --raw-output '.[] | .name, .package' .github/workflows/runtimes-matrix.json |
+            while read -r NAME && read -r PACKAGE; do
+              NAME="$(echo $NAME | tr -d '-' | tr '[:lower:]' '[:upper:]')"
+              RUNTIME_BLOB_NAME=$(echo $PACKAGE | sed 's/-/_/g').compact.compressed.wasm
+              echo "Setting runtime override ${NAME}_WASM=$(pwd)/${RUNTIME_BLOB_NAME}"
+              eval "export ${NAME}_WASM=$(pwd)/${RUNTIME_BLOB_NAME}"
+            done
+
+      # FIX → Install Node + Yarn
+      - name: Setup Node + Yarn
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: corepack enable
 
       - name: Installing dependencies of ecosystem tests
         working-directory: ./ecosystem-tests
@@ -339,13 +338,9 @@ jobs:
           command: cd ecosystem-tests && yarn test
 
   # This will only run if all the tests in its "needs" array passed.
-  # Add this as your required job, becuase if the matrix changes size (new things get added)
-  # it will still require all the steps to succeed.
-  # If you add more jobs, remember to add them to the "needs" array.
   confirmTestPassed:
     runs-on: self-hosted
     name: All tests passed
-    # If any new job gets added, be sure to add it to this list
     needs:
       - runtime-test
       - integration-test
