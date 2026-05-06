@@ -31,19 +31,19 @@ pub type SingleBlockMigrations = (Unreleased, Permanent);
 frame_support::parameter_types! {
 	pub const AhMigratorPalletName: &'static str = "AhMigrator";
 
-	/// Assets that must be moved from the old to the new bounty pot account by
-	/// [`MigrateBountyAccountAssets`]. Restricted to USDC (1337) — KSM, USDT and
-	/// RMRK are intentionally left at the old derivation.
-	pub BountyMigrationAssets: alloc::vec::Vec<xcm::latest::Location> =
-		alloc::vec![xcm::latest::Location::new(
-			0,
-			[
-				xcm::latest::Junction::PalletInstance(
-					crate::xcm_config::TrustBackedAssetsPalletIndex::get(),
-				),
-				xcm::latest::Junction::GeneralIndex(1337),
-			],
-		)];
+	/// Assets that the multi-asset bounty migration must sweep from the old
+	/// derivation to the new one. Extends `treasury::BountyRelevantAssets`
+	/// (the legacy bounties' sweep set: KSM, USDT) with DOT, since
+	/// multi-asset bounties on KAH are also funded in DOT — a foreign asset
+	/// the legacy bounties pallet does not need to handle.
+	///
+	/// Kept local to the migration so the legacy `BountyRelevantAssets`
+	/// stays focused on the legacy bounties pallet's needs.
+	pub BountyMigrationAssets: alloc::vec::Vec<xcm::latest::Location> = {
+		let mut assets = crate::treasury::BountyRelevantAssets::get();
+		assets.push(crate::xcm_config::bridging::to_polkadot::DotLocation::get());
+		assets
+	};
 }
 
 pub type RemoveAhMigratorPallet = frame_support::migrations::RemovePallet<
@@ -66,8 +66,15 @@ pub type RemoveAhMigratorPallet = frame_support::migrations::RemovePallet<
 /// Without this migration, any funds sitting at the old (`&str`-derived)
 /// accounts at the moment of the runtime upgrade would no longer be reachable
 /// by the pallet, which after the upgrade only knows the new (`[u8; 3]`-derived)
-/// accounts. This is not theoretical: a Kusama referendum funding a bounty with
-/// USDT is expected to enact shortly before this runtime ships.
+/// accounts. This is not theoretical: Kusama referenda funding multi-asset
+/// bounties on KAH (some with DOT, some with USDT) are expected to enact
+/// shortly before this runtime ships.
+///
+/// Sweeps every asset listed in [`BountyMigrationAssets`] (the legacy
+/// `BountyRelevantAssets` plus DOT) from the old to the new account. Native
+/// account collisions with the legacy bounties pallet are not possible —
+/// legacy uses `"bt"`/`"cb"` prefixes, multi-asset uses `"mbt"`/`"mcb"`, so
+/// the derived accounts are disjoint.
 pub struct MigrateBountyAccountAssets;
 impl frame_support::traits::OnRuntimeUpgrade for MigrateBountyAccountAssets {
 	fn on_runtime_upgrade() -> frame_support::weights::Weight {

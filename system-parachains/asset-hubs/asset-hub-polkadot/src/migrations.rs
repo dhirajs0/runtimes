@@ -66,31 +66,6 @@ parameter_types! {
 
 parameter_types! {
 	pub const AhMigratorPalletName: &'static str = "AhMigrator";
-
-	/// Assets that must be moved from the old to the new bounty pot account by
-	/// [`MigrateBountyAccountAssets`]. Restricted to USDT (1984) and USDC (1337) —
-	/// DOT and other assets in `treasury::BountyRelevantAssets` are intentionally
-	/// left at the old derivation.
-	pub BountyMigrationAssets: alloc::vec::Vec<xcm::latest::Location> = alloc::vec![
-		xcm::latest::Location::new(
-			0,
-			[
-				xcm::latest::Junction::PalletInstance(
-					crate::xcm_config::TrustBackedAssetsPalletIndex::get(),
-				),
-				xcm::latest::Junction::GeneralIndex(1984),
-			],
-		),
-		xcm::latest::Location::new(
-			0,
-			[
-				xcm::latest::Junction::PalletInstance(
-					crate::xcm_config::TrustBackedAssetsPalletIndex::get(),
-				),
-				xcm::latest::Junction::GeneralIndex(1337),
-			],
-		),
-	];
 }
 
 pub type RemoveAhMigratorPallet = frame_support::migrations::RemovePallet<
@@ -114,6 +89,12 @@ pub type RemoveAhMigratorPallet = frame_support::migrations::RemovePallet<
 /// accounts at the moment of the runtime upgrade would no longer be reachable
 /// by the pallet, which after the upgrade only knows the new (`[u8; 3]`-derived)
 /// accounts.
+///
+/// Reuses the runtime's `pallet_bounties::Config::TransferAllAssets`, which
+/// sweeps every asset listed in `treasury::BountyRelevantAssets` (DOT, USDT,
+/// USDC, on PAH). Native account collisions with the legacy bounties
+/// pallet are not possible — legacy uses `"bt"`/`"cb"` prefixes, multi-asset
+/// uses `"mbt"`/`"mcb"`, so the derived accounts are disjoint.
 pub struct MigrateBountyAccountAssets;
 impl frame_support::traits::OnRuntimeUpgrade for MigrateBountyAccountAssets {
 	fn on_runtime_upgrade() -> frame_support::weights::Weight {
@@ -122,13 +103,9 @@ impl frame_support::traits::OnRuntimeUpgrade for MigrateBountyAccountAssets {
 		use sp_runtime::traits::AccountIdConversion;
 
 		let pallet_id = <Runtime as pallet_treasury::Config>::PalletId::get();
-		let assets_per_bounty = BountyMigrationAssets::get().len() as u64;
+		let assets_per_bounty = crate::treasury::BountyRelevantAssets::get().len() as u64;
 
-		type Transferer = pallet_bounties::TransferAllFungibles<
-			crate::AccountId,
-			crate::NativeAndAssets,
-			BountyMigrationAssets,
-		>;
+		type Transferer = <Runtime as pallet_bounties::Config>::TransferAllAssets;
 
 		let db_weight = <Runtime as frame_system::Config>::DbWeight::get();
 		let mut weight = frame_support::weights::Weight::zero();

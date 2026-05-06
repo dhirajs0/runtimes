@@ -1198,12 +1198,13 @@ fn pure_proxy_stash_can_delegate_to_staking_operator() {
 }
 
 #[test]
-fn migrate_bounty_account_assets_moves_usdc_from_old_to_new_derivation() {
+fn migrate_bounty_account_assets_moves_ksm_dot_and_usdt() {
 	use asset_hub_kusama_runtime::{
-		migrations::MigrateBountyAccountAssets, treasury::TreasuryPalletId,
+		migrations::MigrateBountyAccountAssets, treasury::TreasuryPalletId, ForeignAssets,
 	};
 	use frame_support::traits::{
-		tokens::fungibles::Mutate as _, Get as _, OnRuntimeUpgrade, PalletInfoAccess,
+		fungible::Mutate as _, tokens::fungibles::Mutate as _, Get as _, OnRuntimeUpgrade,
+		PalletInfoAccess,
 	};
 	use pallet_multi_asset_bounties::{Bounty, BountyStatus};
 	use polkadot_runtime_common::impls::VersionedLocatableAsset;
@@ -1211,10 +1212,12 @@ fn migrate_bounty_account_assets_moves_usdc_from_old_to_new_derivation() {
 	use sp_runtime::traits::AccountIdConversion;
 
 	const BOUNTY_ID: u32 = 42;
-	const USDC_ASSET_ID: u32 = 1337;
-	const USDT_ASSET_ID: u32 = 1984; // present in `BountyRelevantAssets`, must NOT move
-	const USDC_AMOUNT: Balance = 300_000 * 1_000_000; // 300k USDC (6 decimals)
-	const USDT_AMOUNT: Balance = 999 * 1_000_000;
+	const USDT_ASSET_ID: u32 = 1984;
+	const UNRELATED_ASSET_ID: u32 = 99; // NOT used by multi-asset bounties, must NOT move
+	const KSM_AMOUNT: Balance = 100 * UNITS;
+	const DOT_AMOUNT: Balance = 50 * UNITS;
+	const USDT_AMOUNT: Balance = 300_000 * 1_000_000; // 6 decimals
+	const UNRELATED_AMOUNT: Balance = 999 * 1_000_000;
 
 	ExtBuilder::<Runtime>::default().build().execute_with(|| {
 		// Insert a `MultiAssetBounties::Bounties` entry so the migration's
@@ -1234,11 +1237,11 @@ fn migrate_bounty_account_assets_moves_usdc_from_old_to_new_derivation() {
 					0,
 					[
 						PalletInstance(<Assets as PalletInfoAccess>::index() as u8),
-						GeneralIndex(USDC_ASSET_ID.into()),
+						GeneralIndex(USDT_ASSET_ID.into()),
 					],
 				)),
 			},
-			value: USDC_AMOUNT,
+			value: USDT_AMOUNT,
 			metadata: H256::zero(),
 			status: BountyStatus::CuratorUnassigned,
 		};
@@ -1254,8 +1257,20 @@ fn migrate_bounty_account_assets_moves_usdc_from_old_to_new_derivation() {
 		));
 		assert_ne!(old, new);
 
-		// Create USDC and USDT (sufficient) and credit both to the *old* pot account.
-		for id in [USDC_ASSET_ID, USDT_ASSET_ID] {
+		// Native KSM (Balances).
+		Balances::mint_into(&old, KSM_AMOUNT).unwrap();
+		// Foreign DOT (registered in `ForeignAssets` by its location).
+		let dot_location = asset_hub_kusama_runtime::xcm_config::bridging::to_polkadot::DotLocation::get();
+		assert_ok!(ForeignAssets::force_create(
+			RuntimeHelper::root_origin(),
+			dot_location.clone(),
+			AccountId::from(SOME_ASSET_ADMIN).into(),
+			true,
+			1,
+		));
+		ForeignAssets::mint_into(dot_location.clone(), &old, DOT_AMOUNT).unwrap();
+		// Trust-backed assets the multi-asset bounties pallet supports.
+		for id in [USDT_ASSET_ID, UNRELATED_ASSET_ID] {
 			assert_ok!(Assets::force_create(
 				RuntimeHelper::root_origin(),
 				id.into(),
@@ -1264,17 +1279,21 @@ fn migrate_bounty_account_assets_moves_usdc_from_old_to_new_derivation() {
 				1,
 			));
 		}
-		Assets::mint_into(USDC_ASSET_ID, &old, USDC_AMOUNT).unwrap();
 		Assets::mint_into(USDT_ASSET_ID, &old, USDT_AMOUNT).unwrap();
+		Assets::mint_into(UNRELATED_ASSET_ID, &old, UNRELATED_AMOUNT).unwrap();
 
 		MigrateBountyAccountAssets::on_runtime_upgrade();
 
-		// USDC moved.
-		assert_eq!(Assets::balance(USDC_ASSET_ID, &old), 0);
-		assert_eq!(Assets::balance(USDC_ASSET_ID, &new), USDC_AMOUNT);
-		// USDT stayed at the old account.
-		assert_eq!(Assets::balance(USDT_ASSET_ID, &old), USDT_AMOUNT);
-		assert_eq!(Assets::balance(USDT_ASSET_ID, &new), 0);
+		// KSM (native), DOT (foreign), and USDT moved.
+		assert_eq!(Balances::free_balance(&old), 0);
+		assert_eq!(Balances::free_balance(&new), KSM_AMOUNT);
+		assert_eq!(ForeignAssets::balance(dot_location.clone(), &old), 0);
+		assert_eq!(ForeignAssets::balance(dot_location, &new), DOT_AMOUNT);
+		assert_eq!(Assets::balance(USDT_ASSET_ID, &old), 0);
+		assert_eq!(Assets::balance(USDT_ASSET_ID, &new), USDT_AMOUNT);
+		// An asset not used by the multi-asset bounties pallet stays at the old account.
+		assert_eq!(Assets::balance(UNRELATED_ASSET_ID, &old), UNRELATED_AMOUNT);
+		assert_eq!(Assets::balance(UNRELATED_ASSET_ID, &new), 0);
 	});
 }
 
