@@ -1260,7 +1260,8 @@ fn migrate_bounty_account_assets_moves_ksm_dot_and_usdt() {
 		// Native KSM (Balances).
 		Balances::mint_into(&old, KSM_AMOUNT).unwrap();
 		// Foreign DOT (registered in `ForeignAssets` by its location).
-		let dot_location = asset_hub_kusama_runtime::xcm_config::bridging::to_polkadot::DotLocation::get();
+		let dot_location =
+			asset_hub_kusama_runtime::xcm_config::bridging::to_polkadot::DotLocation::get();
 		assert_ok!(ForeignAssets::force_create(
 			RuntimeHelper::root_origin(),
 			dot_location.clone(),
